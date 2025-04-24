@@ -4,8 +4,10 @@ package main
 import (
 	"database/sql"
 	"fmt"
+	"io"
 	log "log/slog"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -40,7 +42,7 @@ func worker(shardIndex int, tableName string, batchSize int, shardDir string, co
 	placeholders = placeholders[:len(placeholders)-1]
 	shardPath := shard.GetShardPath(shardIndex, shardDir)
 
-	log.Info("Worker starting:", shardIndex, shardPath)
+	log.Info("Worker starting:", "Index", shardIndex, "Path", shardPath)
 
 	// Open database connection
 	db, err := database.OpenShardDB(shardPath)
@@ -225,6 +227,49 @@ func reader(id, startOffset int, columns []string, output chan<- map[string]stri
 	}
 }
 
+// setupLogging configures structured logging to both console and file
+func setupLogging(conf *config.Config) error {
+	// Create logs directory if it doesn't exist
+	logsDir := filepath.Join(conf.LogDir, "logs")
+	if err := os.MkdirAll(logsDir, 0755); err != nil {
+		return fmt.Errorf("failed to create logs directory: %w", err)
+	}
+
+	// Create log file with timestamp
+	timestamp := time.Now().Format("2006-01-02_15-04-05")
+	logFilePath := filepath.Join(logsDir, fmt.Sprintf("migration_%s.log", timestamp))
+
+	logFile, err := os.OpenFile(logFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return fmt.Errorf("failed to open log file: %w", err)
+	}
+
+	// Create a multi-writer that writes to both stdout and the log file
+	multiWriter := io.MultiWriter(os.Stdout, logFile)
+
+	// Configure structured JSON logging
+	logHandler := slog.NewJSONHandler(multiWriter, &slog.HandlerOptions{
+		Level: slog.LevelInfo,
+		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
+			// Add timestamp in a more readable format
+			if a.Key == slog.TimeKey {
+				return slog.Attr{
+					Key:   slog.TimeKey,
+					Value: slog.StringValue(a.Value.Time().Format(time.RFC3339)),
+				}
+			}
+			return a
+		},
+	})
+
+	// Set as default logger
+	logger := slog.New(logHandler)
+	slog.SetDefault(logger)
+
+	slog.Info("Logging initialized", "logFile", logFilePath)
+	return nil
+}
+
 func main() {
 	start := time.Now()
 
@@ -232,6 +277,12 @@ func main() {
 	conf, err := config.LoadConfig()
 	if err != nil {
 		log.Error("Load config:", "Fatal", err)
+		os.Exit(1)
+	}
+
+	// Set up structured logging
+	if err = setupLogging(conf); err != nil {
+		fmt.Printf("Failed to setup logging: %v\n", err)
 		os.Exit(1)
 	}
 

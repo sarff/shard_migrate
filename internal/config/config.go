@@ -14,6 +14,7 @@ type Config struct {
 	SourceDB      string
 	TableName     string
 	ShardDir      string
+	LogDir        string
 	NumShards     int
 	ReservedShard int
 	BatchSize     int
@@ -24,7 +25,7 @@ type Config struct {
 
 func LoadConfig() (*Config, error) {
 	// Завантаження .env файлу
-	if err := godotenv.Load("/Users/dmit/GolandProjects/shard_migrate/.env"); err != nil {
+	if err := godotenv.Load("./.env"); err != nil {
 		log.Println("Файл .env не знайдено, використовуються значення за замовчуванням")
 	}
 
@@ -33,6 +34,7 @@ func LoadConfig() (*Config, error) {
 		SourceDB:      getEnv("SOURCE_DB", "/Users/dmit/Pycha/TG_Andrew/bot/data/clients.db"),
 		TableName:     getEnv("TABLE_NAME", "clients"),
 		ShardDir:      getEnv("SHARD_DIR", "/Users/dmit/Pycha/TG_Andrew/files/shards"),
+		LogDir:        getEnv("LOG_DIR", "/Users/dmit/Pycha"),
 		NumShards:     getEnvAsInt("NUM_SHARDS", 10),
 		ReservedShard: getEnvAsInt("RESERVED_SHARD", 10),
 		BatchSize:     getEnvAsInt("BATCH_SIZE", 6000),
