@@ -2,162 +2,38 @@
 package main
 
 import (
-	"crypto/sha256"
 	"database/sql"
 	"fmt"
 	"log"
-	"math/big"
 	"os"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/sarff/shard_migrate/internal/config"
+	"github.com/sarff/shard_migrate/internal/progress"
+	"github.com/sarff/shard_migrate/internal/shard"
 	_ "modernc.org/sqlite"
 )
 
-const (
-	sourceDB      = "/Users/dmit/Pycha/TG_Andrew/bot/data/clients.db"
-	tableName     = "clients"
-	shardDir      = "/Users/dmit/Pycha/TG_Andrew/files/shards"
-	numShards     = 10 // Shards 0 through 9 for regular numbers
-	reservedShard = 10 // Reserve shard (index 10) for empty values
-	resumeFrom    = 13912000
-	batchSize     = 6000
-	readers       = 6
-	totalRows     = 1217065012
-	garbcolticker = 5 * time.Minute
-)
+//const (
+//	sourceDB      = "/Users/dmit/Pycha/TG_Andrew/bot/data/clients.db"
+//	tableName     = "clients"
+//	shardDir      = "/Users/dmit/Pycha/TG_Andrew/files/shards"
+//	numShards     = 10 // Shards 0 through 9 for regular numbers
+//	reservedShard = 10 // Reserve shard (index 10) for empty values
+//	resumeFrom    = 23128000
+//	batchSize     = 6000
+//	readers       = 6
+//	totalRows     = 1217065012
+//	garbcolticker = 5 * time.Minute
+//)
 
-func getShardIndex(value interface{}) int {
-	if value == nil {
-		return reservedShard
-	}
-
-	strValue, ok := value.(string)
-	if !ok {
-		return reservedShard
-	}
-
-	if strings.TrimSpace(strValue) == "" {
-		return reservedShard
-	}
-
-	h := sha256.Sum256([]byte(strValue))
-
-	hexHash := fmt.Sprintf("%x", h)
-
-	val := new(big.Int)
-	val.SetString(hexHash, 16)
-
-	mod := new(big.Int).SetInt64(int64(numShards))
-	result := new(big.Int).Mod(val, mod)
-
-	return int(result.Int64())
-}
-
-func getShardPath(index int) string {
-	return filepath.Join(shardDir, "clients_shard_"+pad(index)+".db")
-}
-
-func pad(n int) string {
-	if n < 10 {
-		return "0" + fmt.Sprint(n)
-	}
-	return fmt.Sprint(n)
-}
-
-func openSourceDB() (*sql.DB, error) {
-	db, err := sql.Open("sqlite", sourceDB)
-	if err != nil {
-		return nil, err
-	}
-
-	// Оптимізація налаштувань для джерельної БД
-	db.SetMaxOpenConns(readers + 2)
-	db.SetMaxIdleConns(readers)
-	db.Exec("PRAGMA cache_size = 10000")
-	db.Exec("PRAGMA mmap_size = 1073741824") // 1GB mmap для швидшого доступу
-	db.Exec("PRAGMA temp_store = MEMORY")
-
-	return db, nil
-}
-
-func getColumnNames(db *sql.DB) ([]string, error) {
-	rows, err := db.Query("PRAGMA table_info(" + tableName + ")")
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var columns []string
-	for rows.Next() {
-		var cid int
-		var name, ctype string
-		var notnull, pk int
-		var dflt sql.NullString
-		err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk)
-		if err != nil {
-			return nil, err
-		}
-		columns = append(columns, name)
-	}
-	return columns, nil
-}
-
-func ensureTable(db *sql.DB, columns []string) error {
-	// Check if the table exists
-	var count int
-	err := db.QueryRow("SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?", tableName).Scan(&count)
-	if err != nil {
-		return err
-	}
-
-	// If the table does not exist, create it and add the indexes
-	if count == 0 {
-		colDefs := make([]string, len(columns))
-		for i, col := range columns {
-			colDefs[i] = "\"" + col + "\" TEXT"
-		}
-		query := "CREATE TABLE IF NOT EXISTS " + tableName + " (" + strings.Join(colDefs, ", ") + ")"
-		_, err = db.Exec(query)
-		if err != nil {
-			return fmt.Errorf("failed to create table: %v", err)
-		}
-
-		log.Printf("Created table %s, adding specific indexes...", tableName)
-
-		// indexes
-		indexColumns := []string{"ИНН", "MOBILE_NUMBER", "СНИЛС"}
-
-		for _, column := range indexColumns {
-			columnExists := false
-			for _, col := range columns {
-				if col == column {
-					columnExists = true
-					break
-				}
-			}
-
-			if columnExists {
-				indexName := fmt.Sprintf("idx_%s_%s", tableName, column)
-				indexQuery := fmt.Sprintf("CREATE INDEX IF NOT EXISTS %s ON %s(\"%s\")",
-					indexName, tableName, column)
-
-				_, err = db.Exec(indexQuery)
-				if err != nil {
-					log.Printf("Warning: failed to create index on %s: %v", column, err)
-				} else {
-					log.Printf("Created index %s on column %s", indexName, column)
-				}
-			} else {
-				log.Printf("Column %s not found, skipping index creation", column)
-			}
-		}
-	}
-
-	return nil
+type Work struct {
+	db       *sql.DB
+	config   *config.Config
+	progress progress.Progress
 }
 
 func worker(shardIndex int, columns []string, input <-chan map[string]string, wg *sync.WaitGroup, stopChan <-chan struct{}) {
@@ -165,7 +41,7 @@ func worker(shardIndex int, columns []string, input <-chan map[string]string, wg
 	colsStr := "\"" + strings.Join(columns, "\", \"") + "\""
 	placeholders := strings.Repeat("?,", len(columns))
 	placeholders = placeholders[:len(placeholders)-1]
-	shardPath := getShardPath(shardIndex)
+	shardPath := shard.GetShardPath(shardIndex)
 
 	log.Printf("Worker %d starting, shard path: %s", shardIndex, shardPath)
 
@@ -175,13 +51,11 @@ func worker(shardIndex int, columns []string, input <-chan map[string]string, wg
 	}
 	defer db.Close()
 
-	// aggresive SQLite for write
-	db.Exec("PRAGMA synchronous = OFF")
-	db.Exec("PRAGMA journal_mode = MEMORY")
-	db.Exec("PRAGMA temp_store = MEMORY")
-	db.Exec("PRAGMA cache_size = 5000")
-	db.Exec("PRAGMA page_size = 8192")
-	db.Exec("PRAGMA locking_mode = EXCLUSIVE")
+	db.Exec("PRAGMA synchronous = NORMAL") // компроміс між OFF і FULL
+	db.Exec("PRAGMA foreign_keys = OFF")   // компроміс між OFF і FULL
+	db.Exec("PRAGMA journal_mode = WAL")
+	db.Exec("PRAGMA temp_store = MEMORY") // можна залишити для швидкості
+	db.Exec("PRAGMA cache_size = 5000")   // можна повернути
 
 	err = ensureTable(db, columns)
 	if err != nil {
@@ -271,7 +145,7 @@ func commitBatch(db *sql.DB, insertSQL string, batch [][]interface{}) {
 	}
 }
 
-func reader(id, startOffset int, columns []string, output chan<- map[string]string, wg *sync.WaitGroup, stopChan <-chan struct{}) {
+func reader(id, startOffset int, columns []string, output chan<- map[string]string, conf *config.Config, wg *sync.WaitGroup, stopChan <-chan struct{}) {
 	defer wg.Done()
 	db, err := openSourceDB()
 	if err != nil {
@@ -293,7 +167,7 @@ func reader(id, startOffset int, columns []string, output chan<- map[string]stri
 			log.Printf("Reader %d stopped by signal", id)
 			return
 		default:
-			query := fmt.Sprintf("SELECT %s FROM %s LIMIT %d OFFSET %d", colsStr, tableName, batchSize, offset)
+			query := fmt.Sprintf("SELECT %s FROM %s LIMIT %d OFFSET %d", colsStr, conf.TableName, conf.BatchSize, offset)
 			rows, err := db.Query(query)
 			if err != nil {
 				log.Printf("Reader %d query error: %v", id, err)
@@ -351,7 +225,7 @@ func reader(id, startOffset int, columns []string, output chan<- map[string]stri
 				return
 			}
 
-			offset += batchSize * readers
+			offset += conf.BatchSize * conf.Readers
 		}
 	}
 }
@@ -359,7 +233,14 @@ func reader(id, startOffset int, columns []string, output chan<- map[string]stri
 func main() {
 	start := time.Now()
 
-	if err := os.MkdirAll(shardDir, 0755); err != nil {
+	// Завантаження конфігурації з .env
+	conf, err := config.LoadConfig()
+	if err != nil {
+		fmt.Printf("Помилка завантаження конфігурації: %v\n", err)
+		os.Exit(1)
+	}
+
+	if err := os.MkdirAll(conf.ShardDir, 0755); err != nil {
 		log.Fatalf("Failed to create shard directory: %v", err)
 	}
 
@@ -374,17 +255,19 @@ func main() {
 	}
 	refDB.Close()
 
-	log.Printf("Starting migration with %d columns, %d shards, %d readers", len(columns), numShards+1, readers)
-	log.Printf("Shards will be numbered from 0 to %d (including reserved shard %d)", numShards, reservedShard)
+	existProgress, err := progress.LoadProgress(conf)
+
+	log.Printf("Starting migration with %d columns, %d shards, %d readers", len(columns), conf.NumShards+1, conf.Readers)
+	log.Printf("Shards will be numbered from 0 to %d (including reserved shard %d)", conf.NumShards, conf.ReservedShard)
 
 	stopChan := make(chan struct{})
 
 	// Channels for data to shards (from 0 to numShards, including the backup shard)
-	shardChans := make([]chan map[string]string, numShards+1)
+	shardChans := make([]chan map[string]string, conf.NumShards+1)
 	var wg sync.WaitGroup
 
 	//  Run wokers for all shards, including the reserve shard
-	for i := 0; i <= numShards; i++ {
+	for i := 0; i <= conf.NumShards; i++ {
 		shardChans[i] = make(chan map[string]string, 1000)
 		wg.Add(1)
 		go worker(i, columns, shardChans[i], &wg, stopChan)
@@ -393,9 +276,9 @@ func main() {
 	input := make(chan map[string]string, 5000)
 
 	// start readers
-	for i := 0; i < readers; i++ {
+	for i := 0; i < conf.Readers; i++ {
 		wg.Add(1)
-		go reader(i, resumeFrom+i*batchSize, columns, input, &wg, stopChan)
+		go reader(i, existProgress.ResumeFrom+i*conf.BatchSize, columns, input, conf, &wg, stopChan)
 	}
 
 	// Zabbix ))
@@ -418,7 +301,7 @@ func main() {
 
 	// Periodic forced memory clearing
 	go func() {
-		ticker := time.NewTicker(garbcolticker)
+		ticker := time.NewTicker(conf.GarbColTicker)
 		defer ticker.Stop()
 
 		for {
@@ -451,8 +334,8 @@ func main() {
 
 	// Processing the distribution of rows by shards
 	processed := 0
-	start_pos := resumeFrom
-	reportEvery := batchSize
+	start_pos := existProgress.ResumeFrom
+	reportEvery := conf.BatchSize
 	lastReportTime := time.Now()
 	lastProcessed := 0
 
@@ -463,13 +346,13 @@ func main() {
 			mobileValue = mobileNumber
 		}
 
-		idx := getShardIndex(mobileValue)
+		idx := shard.GetShardIndex(mobileValue)
 
 		// Additional check to avoid overruns of the array
 		if idx >= len(shardChans) {
 			log.Printf("Warning: Invalid shard index %d, using reserved shard (%d) instead",
-				idx, reservedShard)
-			idx = reservedShard
+				idx, conf.ReservedShard)
+			idx = conf.ReservedShard
 		}
 
 		select {
@@ -480,9 +363,9 @@ func main() {
 				now := time.Now()
 				elapsed := now.Sub(lastReportTime)
 				rowsPerSec := float64(processed-lastProcessed) / elapsed.Seconds()
-				progress := float64(processed+start_pos) / float64(totalRows) * 100
+				progRess := float64(processed+start_pos) / float64(conf.TotalRows) * 100
 				log.Printf("Processed: %d | Total: %d | Remaining: %d | Speed: %.1f rows/sec | Progress: %.1f",
-					processed+start_pos, totalRows, totalRows-processed-start_pos, rowsPerSec, progress)
+					processed+start_pos, conf.TotalRows, conf.TotalRows-int64(processed)-int64(start_pos), rowsPerSec, progRess)
 				lastReportTime = now
 				lastProcessed = processed
 			}
