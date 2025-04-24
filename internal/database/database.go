@@ -3,10 +3,11 @@ package database
 import (
 	"database/sql"
 	"fmt"
-	"log"
+	log "log/slog"
 	"strings"
 
 	"github.com/sarff/shard_migrate/internal/config"
+	"golang.org/x/exp/slog"
 )
 
 func OpenSourceDB(conf *config.Config) (*sql.DB, error) {
@@ -67,7 +68,7 @@ func EnsureTable(db *sql.DB, tableName string, columns []string) error {
 			return fmt.Errorf("failed to create table: %v", err)
 		}
 
-		log.Printf("Created table %s, adding specific indexes...", tableName)
+		log.Info("Created table, adding specific indexes...", tableName)
 
 		// indexes
 		indexColumns := []string{"ИНН", "MOBILE_NUMBER", "СНИЛС"}
@@ -88,15 +89,33 @@ func EnsureTable(db *sql.DB, tableName string, columns []string) error {
 
 				_, err = db.Exec(indexQuery)
 				if err != nil {
-					log.Printf("Warning: failed to create index on %s: %v", column, err)
+					log.Info("Warning: failed to create index on %s: %v", column, err)
 				} else {
-					log.Printf("Created index %s on column %s", indexName, column)
+					log.Info("Created index %s on column ", indexName, column)
 				}
 			} else {
-				log.Printf("Column %s not found, skipping index creation", column)
+				log.Info("Column %s not found, skipping index creation", column)
 			}
 		}
 	}
 
 	return nil
+}
+
+// OpenShardDB opens a shard database with optimized settings
+func OpenShardDB(shardPath string) (*sql.DB, error) {
+	db, err := sql.Open("sqlite", shardPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open shard database: %w", err)
+	}
+
+	// Optimize settings for shard database
+	db.Exec("PRAGMA synchronous = NORMAL") // compromise between OFF and FULL
+	db.Exec("PRAGMA foreign_keys = OFF")
+	db.Exec("PRAGMA journal_mode = WAL")
+	db.Exec("PRAGMA temp_store = MEMORY")
+	db.Exec("PRAGMA cache_size = 5000")
+
+	slog.Info("Shard database opened with optimized settings", "path", shardPath)
+	return db, nil
 }

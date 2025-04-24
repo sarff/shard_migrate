@@ -24,7 +24,7 @@ type Config struct {
 
 func LoadConfig() (*Config, error) {
 	// Завантаження .env файлу
-	if err := godotenv.Load(); err != nil {
+	if err := godotenv.Load("/Users/dmit/GolandProjects/shard_migrate/.env"); err != nil {
 		log.Println("Файл .env не знайдено, використовуються значення за замовчуванням")
 	}
 
