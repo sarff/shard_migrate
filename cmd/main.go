@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/sarff/shard_migrate/internal/config"
+	"github.com/sarff/shard_migrate/internal/database"
 	"github.com/sarff/shard_migrate/internal/progress"
 	"github.com/sarff/shard_migrate/internal/shard"
 	_ "modernc.org/sqlite"
@@ -29,12 +30,6 @@ import (
 //	totalRows     = 1217065012
 //	garbcolticker = 5 * time.Minute
 //)
-
-type Work struct {
-	db       *sql.DB
-	config   *config.Config
-	progress progress.Progress
-}
 
 func worker(shardIndex int, columns []string, input <-chan map[string]string, wg *sync.WaitGroup, stopChan <-chan struct{}) {
 	defer wg.Done()
@@ -147,7 +142,7 @@ func commitBatch(db *sql.DB, insertSQL string, batch [][]interface{}) {
 
 func reader(id, startOffset int, columns []string, output chan<- map[string]string, conf *config.Config, wg *sync.WaitGroup, stopChan <-chan struct{}) {
 	defer wg.Done()
-	db, err := openSourceDB()
+	db, err := database.OpenSourceDB(conf)
 	if err != nil {
 		log.Fatalf("reader %d open error: %v", id, err)
 	}
@@ -245,11 +240,11 @@ func main() {
 	}
 
 	// Get the structure of the table
-	refDB, err := openSourceDB()
+	refDB, err := database.OpenSourceDB(conf)
 	if err != nil {
 		log.Fatalf("Failed to open source DB: %v", err)
 	}
-	columns, err := getColumnNames(refDB)
+	columns, err := database.GetColumnNames(refDB, conf.TableName)
 	if err != nil {
 		log.Fatalf("Failed to get column names: %v", err)
 	}

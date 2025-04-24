@@ -5,17 +5,19 @@ import (
 	"fmt"
 	"log"
 	"strings"
+
+	"github.com/sarff/shard_migrate/internal/config"
 )
 
-func OpenSourceDB() (*sql.DB, error) {
-	db, err := sql.Open("sqlite", sourceDB)
+func OpenSourceDB(conf *config.Config) (*sql.DB, error) {
+	db, err := sql.Open("sqlite", conf.SourceDB)
 	if err != nil {
 		return nil, err
 	}
 
 	// Оптимізація налаштувань для джерельної БД
-	db.SetMaxOpenConns(readers + 2)
-	db.SetMaxIdleConns(readers)
+	db.SetMaxOpenConns(conf.Readers + 2)
+	db.SetMaxIdleConns(conf.Readers)
 	db.Exec("PRAGMA cache_size = 10000")
 	db.Exec("PRAGMA mmap_size = 1073741824") // 1GB mmap для швидшого доступу
 	db.Exec("PRAGMA temp_store = MEMORY")
@@ -23,7 +25,7 @@ func OpenSourceDB() (*sql.DB, error) {
 	return db, nil
 }
 
-func getColumnNames(db *sql.DB) ([]string, error) {
+func GetColumnNames(db *sql.DB, tableName string) ([]string, error) {
 	rows, err := db.Query("PRAGMA table_info(" + tableName + ")")
 	if err != nil {
 		return nil, err
@@ -45,7 +47,7 @@ func getColumnNames(db *sql.DB) ([]string, error) {
 	return columns, nil
 }
 
-func ensureTable(db *sql.DB, columns []string) error {
+func EnsureTable(db *sql.DB, tableName string, columns []string) error {
 	// Check if the table exists
 	var count int
 	err := db.QueryRow("SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?", tableName).Scan(&count)
