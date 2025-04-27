@@ -16,11 +16,11 @@ func OpenSourceDB(conf *config.Config) (*sql.DB, error) {
 		return nil, err
 	}
 
-	// Оптимізація налаштувань для джерельної БД
+	// Optimize settings for the source database
 	db.SetMaxOpenConns(conf.Readers + 2)
 	db.SetMaxIdleConns(conf.Readers)
 	db.Exec("PRAGMA cache_size = 10000")
-	db.Exec("PRAGMA mmap_size = 1073741824") // 1GB mmap для швидшого доступу
+	db.Exec("PRAGMA mmap_size = 1073741824") // 1GB
 	db.Exec("PRAGMA temp_store = MEMORY")
 
 	return db, nil
