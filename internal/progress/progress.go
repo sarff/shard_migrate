@@ -58,5 +58,5 @@ func SaveProgress(conf *config.Config, progress *Progress, position int) error {
 	}
 
 	progressPath := filepath.Join(conf.ShardDir, "progress.json")
-	return os.WriteFile(progressPath, data, 0644)
+	return os.WriteFile(progressPath, data, 0o644)
 }

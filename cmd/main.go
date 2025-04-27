@@ -22,19 +22,6 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-//const (
-//	sourceDB      = "/Users/dmit/Pycha/TG_Andrew/bot/data/clients.db"
-//	tableName     = "clients"
-//	shardDir      = "/Users/dmit/Pycha/TG_Andrew/files/shards"
-//	numShards     = 10 // Shards 0 through 9 for regular numbers
-//	reservedShard = 10 // Reserve shard (index 10) for empty values
-//	resumeFrom    = 23128000
-//	batchSize     = 6000
-//	readers       = 6
-//	totalRows     = 1217065012
-//	garbcolticker = 5 * time.Minute
-//)
-
 func worker(shardIndex int, tableName string, batchSize int, shardDir string, columns []string, input <-chan map[string]string, wg *sync.WaitGroup, stopChan <-chan struct{}) {
 	defer wg.Done()
 	colsStr := "\"" + strings.Join(columns, "\", \"") + "\""
@@ -231,7 +218,7 @@ func reader(id, startOffset int, columns []string, output chan<- map[string]stri
 func setupLogging(conf *config.Config) error {
 	// Create logs directory if it doesn't exist
 	logsDir := filepath.Join(conf.LogDir, "logs")
-	if err := os.MkdirAll(logsDir, 0755); err != nil {
+	if err := os.MkdirAll(logsDir, 0o755); err != nil {
 		return fmt.Errorf("failed to create logs directory: %w", err)
 	}
 
@@ -239,7 +226,7 @@ func setupLogging(conf *config.Config) error {
 	timestamp := time.Now().Format("2006-01-02_15-04-05")
 	logFilePath := filepath.Join(logsDir, fmt.Sprintf("migration_%s.log", timestamp))
 
-	logFile, err := os.OpenFile(logFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	logFile, err := os.OpenFile(logFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		return fmt.Errorf("failed to open log file: %w", err)
 	}
@@ -286,7 +273,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err = os.MkdirAll(conf.ShardDir, 0755); err != nil {
+	if err = os.MkdirAll(conf.ShardDir, 0o755); err != nil {
 		log.Error("Failed to create shard directory", "Fatal", err)
 		os.Exit(1)
 	}
